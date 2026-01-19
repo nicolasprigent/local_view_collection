@@ -1,0 +1,32 @@
+schema_version = "1.0.0"
+
+id = "local_view_collection"
+version = "1.0.0"
+name = "Local View by collection"
+tagline = "Quickly isolate into local view the objects of a collection"
+maintainer = "D3W3"
+website = "https://blender.org"
+
+type = "add-on"
+
+# Choose tags from Blender's categories where possible
+# See: https://docs.blender.org/manual/en/latest/advanced/extensions/getting_started.html#metadata
+# These are free-form but should be relevant to the add-on's area
+# Examples: "3D View", "Object", "Workflow"
+tags = [
+  "3D View",
+  "Object",
+  "User Interface"
+]
+
+# The Extensions Platform is available in Blender 4.2+
+# Set a minimum version that you target and test against
+blender_version_min = "4.2.0"
+
+# Blender add-ons must be GPL-compatible. SPDX identifier preferred.
+license = ["SPDX:GPL-3.0-or-later"]
+
+# No special permissions are required: the add-on uses standard Blender API only
+# [permissions]
+# network = false
+# files = false
