@@ -1,7 +1,7 @@
-schema_version = "1.0.0"
+schema_version = "1.0.1"
 
 id = "local_view_collection"
-version = "1.0.0"
+version = "1.0.1"
 name = "Local View by collection"
 tagline = "Quickly isolate into local view the objects of a collection"
 maintainer = "D3W3"
@@ -30,3 +30,15 @@ license = ["SPDX:GPL-3.0-or-later"]
 # [permissions]
 # network = false
 # files = false
+
+[build]
+# Exclude common folders/files from the build package
+paths_exclude_pattern = [
+  "__pycache__/",
+  "dist/",
+  "/.git/",
+  "/.vscode/",
+  "/.github/",
+  ".gitignore",
+  "*.zip",
+]

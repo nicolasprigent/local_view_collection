@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Local View by Collection",
     "author": "D3W3",
-    "version": (0, 1, 0),
+    "version": (1, 0, 1),
     "blender": (3, 0, 0),
     "location": "3D View",
     "description": "Show collection hierarchy in 3D viewsport to quickly isolate into local view the objects of a collection. Use Numpad * to see the popup.",
@@ -61,6 +61,89 @@ def _is_in_local_view(space):
     except Exception:
         return False
 
+def _ensure_local_view_active(context, area, region, space, view_layer, target_objs):
+    if _is_in_local_view(space):
+        return True
+    try:
+        bpy.ops.view3d.localview(frame_selected=False)
+    except Exception:
+        pass
+    if _is_in_local_view(space):
+        return True
+    # If we have targets, temporarily select them to enter Local View, then deselect
+    if target_objs:
+        try:
+            visible_targets = [o for o in target_objs if o and getattr(o, 'visible_get', lambda: True)()]
+        except Exception:
+            visible_targets = list(target_objs)
+
+        if not visible_targets:
+            return False
+
+        try:
+            if getattr(context, 'mode', 'OBJECT') != 'OBJECT':
+                bpy.ops.object.mode_set(mode='OBJECT')
+        except Exception:
+            pass
+
+        try:
+            bpy.ops.object.select_all(action='DESELECT')
+        except Exception:
+            pass
+
+        first = None
+        for o in visible_targets:
+            try:
+                o.select_set(True)
+                if first is None:
+                    first = o
+            except Exception:
+                pass
+        if first is not None:
+            try:
+                view_layer.objects.active = first
+            except Exception:
+                pass
+
+        try:
+            bpy.ops.view3d.localview(frame_selected=False)
+        except Exception:
+            pass
+
+        try:
+            bpy.ops.object.select_all(action='DESELECT')
+        except Exception:
+            pass
+
+        return _is_in_local_view(space)
+    return False
+
+def _target_objects_from_collections(collections, include_children=True):
+    """Return a flat, deduplicated list of objects from collections.
+    Used to build target_objs for Local View and membership updates."""
+    seen = set()
+    result = []
+    for coll in collections:
+        if coll is None:
+            continue
+        try:
+            objs_src = None
+            if include_children and hasattr(coll, 'all_objects'):
+                objs_src = coll.all_objects
+            else:
+                objs_src = getattr(coll, 'objects', [])
+            for obj in objs_src:
+                if obj and obj.name not in seen:
+                    seen.add(obj.name)
+                    result.append(obj)
+        except Exception:
+            # Fallback: try plain objects list
+            for obj in list(getattr(coll, 'objects', [])):
+                if obj and obj.name not in seen:
+                    seen.add(obj.name)
+                    result.append(obj)
+    return result
+
 
 class VIEW3D_OT_local_view_collection_activate(Operator):
     """Select all objects in the chosen Collection and toggle Local View"""
@@ -69,122 +152,19 @@ class VIEW3D_OT_local_view_collection_activate(Operator):
     bl_options = {'REGISTER', 'UNDO'}
 
     collection_name: StringProperty(name="Collection", default="")
-    include_children: BoolProperty(name="Include Child Collections", default=True)
-
-    def execute(self, context):
-        # Capture previous selection state
-        prev_selected = list(context.selected_objects)
-        prev_active = context.view_layer.objects.active
-
-        coll = bpy.data.collections.get(self.collection_name)
-        if coll is None:
-            self.report({'WARNING'}, f"Collection not found: {self.collection_name}")
-            return {'CANCELLED'}
-
-        area = _get_3dview_area(context)
-        region = _get_window_region(area)
-        space = _get_view3d_space(area)
-        if area is None or region is None or space is None:
-            self.report({'WARNING'}, "No active 3D View found")
-            return {'CANCELLED'}
-
-        # Prepare selection and local view switching
-        view_layer = context.view_layer
-        first_obj = None
-
-        try:
-            # Use temp_override for robust operator context in Blender 3.x+
-            with bpy.context.temp_override(window=context.window,
-                                           screen=context.window.screen,
-                                           area=area,
-                                           region=region,
-                                           space_data=space,
-                                           scene=context.scene,
-                                           view_layer=view_layer):
-                # If already in Local View, exit first so we can switch to the new set
-                if _is_in_local_view(space):
-                    bpy.ops.view3d.localview()
-
-                # Deselect everything, ensure OBJECT mode
-                try:
-                    bpy.ops.object.select_all(action='DESELECT')
-                except Exception:
-                    try:
-                        bpy.ops.object.mode_set(mode='OBJECT')
-                        bpy.ops.object.select_all(action='DESELECT')
-                    except Exception:
-                        pass
-
-                # Select visible objects in the chosen collection (optionally including children)
-                if self.include_children and hasattr(coll, 'all_objects'):
-                    iterator = coll.all_objects
-                else:
-                    iterator = coll.objects
-
-                for obj in iterator:
-                    try:
-                        if obj.visible_get():
-                            obj.select_set(True)
-                            if first_obj is None:
-                                first_obj = obj
-                    except Exception:
-                        pass
-
-                if first_obj is None:
-                    self.report({'WARNING'}, "Collection has no visible objects")
-                    return {'CANCELLED'}
-
-                # Set active object
-                try:
-                    view_layer.objects.active = first_obj
-                except Exception:
-                    pass
-
-                # Enter Local View for the selected set
-                bpy.ops.view3d.localview()
-
-                # Restore or clear selection depending on prior state
-                try:
-                    if prev_selected:
-                        # Restore previous selection and active object
-                        bpy.ops.object.select_all(action='DESELECT')
-                        for obj in prev_selected:
-                            try:
-                                obj.select_set(True)
-                            except Exception:
-                                pass
-                        try:
-                            if prev_active:
-                                view_layer.objects.active = prev_active
-                        except Exception:
-                            pass
-                    else:
-                        # No prior selection: leave nothing selected
-                        bpy.ops.object.select_all(action='DESELECT')
-                except Exception:
-                    # If selection restore fails due to Local View visibility constraints, ignore
-                    pass
-        except Exception as e:
-            self.report({'ERROR'}, f"Failed to toggle Local View: {e}")
-            return {'CANCELLED'}
-
-        return {'FINISHED'}
-
-
-class VIEW3D_OT_local_view_collections_activate(Operator):
-    """Select all objects from the given Collections and toggle Local View"""
-    bl_idname = "view3d.local_view_collections_activate"
-    bl_label = "Local View: Activate Collections"
-    bl_options = {'REGISTER', 'UNDO'}
-
     collection_names: StringProperty(name="Collections", default="")
     include_children: BoolProperty(name="Include Child Collections", default=True)
 
     def execute(self, context):
-        prev_selected = list(context.selected_objects)
-        prev_active = context.view_layer.objects.active
+        names = []
+        if self.collection_names.strip():
+            names.extend([n for n in self.collection_names.split('\n') if n])
+        elif self.collection_name:
+            names.append(self.collection_name)
+        else:
+            self.report({'WARNING'}, "No collection provided")
+            return {'CANCELLED'}
 
-        names = [n for n in self.collection_names.split('\n') if n]
         collections = [bpy.data.collections.get(n) for n in names]
         collections = [c for c in collections if c is not None]
         if not collections:
@@ -197,11 +177,10 @@ class VIEW3D_OT_local_view_collections_activate(Operator):
         if area is None or region is None or space is None:
             self.report({'WARNING'}, "No active 3D View found")
             return {'CANCELLED'}
-
         view_layer = context.view_layer
-        first_obj = None
 
         try:
+            # Use temp_override for robust operator context in Blender 3.x+
             with bpy.context.temp_override(window=context.window,
                                            screen=context.window.screen,
                                            area=area,
@@ -209,65 +188,30 @@ class VIEW3D_OT_local_view_collections_activate(Operator):
                                            space_data=space,
                                            scene=context.scene,
                                            view_layer=view_layer):
-                if _is_in_local_view(space):
-                    bpy.ops.view3d.localview()
-
-                try:
-                    bpy.ops.object.select_all(action='DESELECT')
-                except Exception:
-                    try:
-                        bpy.ops.object.mode_set(mode='OBJECT')
-                        bpy.ops.object.select_all(action='DESELECT')
-                    except Exception:
-                        pass
-
-                seen = set()
-                for coll in collections:
-                    iterator = coll.all_objects if (self.include_children and hasattr(coll, 'all_objects')) else coll.objects
-                    for obj in iterator:
-                        if obj and obj.name not in seen:
-                            seen.add(obj.name)
-                            try:
-                                if obj.visible_get():
-                                    obj.select_set(True)
-                                    if first_obj is None:
-                                        first_obj = obj
-                            except Exception:
-                                pass
-
-                if first_obj is None:
-                    self.report({'WARNING'}, "Collections have no visible objects")
+                # Build union of target objects across provided collections
+                target_objs = _target_objects_from_collections(collections, self.include_children)
+                # Ensure the viewport is in Local View;
+                if not _ensure_local_view_active(context, area, region, space, view_layer, target_objs):
+                    self.report({'ERROR'}, "Could not activate Local View automatically")
                     return {'CANCELLED'}
 
-                try:
-                    view_layer.objects.active = first_obj
-                except Exception:
-                    pass
+                # Build target object name set
+                target_names = {obj.name for obj in target_objs}
 
-                bpy.ops.view3d.localview()
-
-                try:
-                    if prev_selected:
-                        bpy.ops.object.select_all(action='DESELECT')
-                        for obj in prev_selected:
-                            try:
-                                obj.select_set(True)
-                            except Exception:
-                                pass
-                        try:
-                            if prev_active:
-                                view_layer.objects.active = prev_active
-                        except Exception:
-                            pass
-                    else:
-                        bpy.ops.object.select_all(action='DESELECT')
-                except Exception:
-                    pass
+                # Set local view membership per object, no selection/visibility changes
+                for obj in context.scene.objects:
+                    try:
+                        obj.local_view_set(space, obj.name in target_names)
+                    except Exception:
+                        pass
         except Exception as e:
             self.report({'ERROR'}, f"Failed to toggle Local View: {e}")
             return {'CANCELLED'}
 
         return {'FINISHED'}
+
+
+## Removed: VIEW3D_OT_local_view_collections_activate (merged into single operator above)
 
 
 def _find_layer_collection_path(node, target_collection):
@@ -352,9 +296,9 @@ class VIEW3D_OT_collection_hierarchy_popup(Operator):
 
                 # Trigger Local View for the union directly; no popup needed
                 names = "\n".join([c.name for c in sorted(union_colls, key=lambda c: c.name.lower())])
-                bpy.ops.view3d.local_view_collections_activate('INVOKE_DEFAULT',
-                                                                collection_names=names,
-                                                                include_children=True)
+                bpy.ops.view3d.local_view_collection_activate('INVOKE_DEFAULT',
+                                                              collection_names=names,
+                                                              include_children=True)
                 return {'FINISHED'}
             else:
                 # Single selection: show path entries for that object's collections
@@ -425,7 +369,6 @@ class VIEW3D_MT_local_view_collections(Menu):
 
 def register():
     bpy.utils.register_class(VIEW3D_OT_local_view_collection_activate)
-    bpy.utils.register_class(VIEW3D_OT_local_view_collections_activate)
     bpy.utils.register_class(VIEW3D_MT_local_view_collections)
     bpy.utils.register_class(VIEW3D_OT_collection_hierarchy_popup)
 
@@ -457,7 +400,6 @@ def unregister():
 
     bpy.utils.unregister_class(VIEW3D_MT_local_view_collections)
     bpy.utils.unregister_class(VIEW3D_OT_local_view_collection_activate)
-    bpy.utils.unregister_class(VIEW3D_OT_local_view_collections_activate)
     bpy.utils.unregister_class(VIEW3D_OT_collection_hierarchy_popup)
 
 

@@ -7,13 +7,15 @@ This addon shows a collection hierarchy in the 3D viewsport to quickly isolate i
   - With selection: only parent paths of the selected objects' Collections
   - Without selection: full View Layer Collections tree
 - Click on a collection name to set local view on all objects in it, including the ones in child collection
-- `Numpad /` to go out of local view
+- Automatically enters Local View when selecting a collection if not already active.
+- `Numpad /` to toggle Local View manually if needed
 
 ## Customization
 - Change the hierarchy keymap: Preferences → Keymap → Window → bind `view3d.collection_hierarchy_popup`.
 - Restore the Local View popup: Preferences → Keymap → 3D View → add a key for `wm.call_menu` with name `VIEW3D_MT_local_view_collections`.
-- Include child collections in isolation: modify `VIEW3D_OT_local_view_collection_activate` selection logic.
+- Include child collections in isolation: operator includes child collections by default.
 
 ## Notes
 - The shortcut uses Numpad `*` (no modifier). You can change it in Preferences → Keymap.
-- Should work on versions of Blender before 4.2.0 (tested on 3.3.21)
+- The add-on does not change your selection or object visibility; it sets Local View membership for objects directly and will enter Local View automatically.
+- Should work on Blender 3.0+ (tested on 3.3.21)
