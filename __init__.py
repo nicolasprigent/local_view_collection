@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Local View by Collection",
     "author": "D3W3",
-    "version": (1, 0, 1),
+    "version": (1, 0, 2),
     "blender": (3, 0, 0),
     "location": "3D View",
     "description": "Show collection hierarchy in 3D viewsport to quickly isolate into local view the objects of a collection. Use Numpad * to see the popup.",
@@ -16,6 +16,30 @@ from bpy.props import StringProperty, BoolProperty
 
 # Store addon keymaps so they can be cleaned up on unregister
 addon_keymaps = []
+
+
+def _find_best_3d_area(context):
+    """Return (area, space) for the best VIEW_3D to use for Local View.
+
+    Priority:
+    1. A VIEW_3D that already has local_view active.
+    2. The first VIEW_3D in the current screen areas list.
+    """
+    # Priority 1: viewport already in local view
+    for a in context.window.screen.areas:
+        if a.type == 'VIEW_3D':
+            for s in a.spaces:
+                if s.type == 'VIEW_3D' and s.local_view is not None:
+                    return a, s
+
+    # Priority 2: first VIEW_3D on screen
+    for a in context.window.screen.areas:
+        if a.type == 'VIEW_3D':
+            for s in a.spaces:
+                if s.type == 'VIEW_3D':
+                    return a, s
+
+    return None, None
 
 
 def _get_3dview_area(context):
@@ -214,6 +238,88 @@ class VIEW3D_OT_local_view_collection_activate(Operator):
 ## Removed: VIEW3D_OT_local_view_collections_activate (merged into single operator above)
 
 
+class OUTLINER_OT_local_view_collection(Operator):
+    """Isolate the selected collection(s) from the Outliner in Local View"""
+    bl_idname = "outliner.local_view_collection"
+    bl_label = "Isolate in Local View"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        # --- Gather target collections -------------------------------------------
+        # In Blender 4.x the Outliner exposes all selected data-blocks via
+        # context.selected_ids.  Filter to keep only Collection objects.
+        # Objects selected in the 3-D viewport are NOT included (they are not
+        # data-blocks in the Outliner sense), so the requirement "ignore objects
+        # selected in other collections" is automatically satisfied.
+        collections = []
+        selected_ids = getattr(context, 'selected_ids', None)
+        if selected_ids:
+            collections = [
+                id_block for id_block in selected_ids
+                if isinstance(id_block, bpy.types.Collection)
+            ]
+        # Fallback: use the single collection the operator was invoked on
+        if not collections:
+            coll = getattr(context, 'collection', None)
+            if coll is not None:
+                collections = [coll]
+
+        if not collections:
+            self.report({'WARNING'}, "No collection selected")
+            return {'CANCELLED'}
+
+        # --- Find the best 3-D viewport ------------------------------------------
+        area, space = _find_best_3d_area(context)
+        if area is None or space is None:
+            self.report({'WARNING'}, "No 3D View found in current screen")
+            return {'CANCELLED'}
+
+        region = _get_window_region(area)
+        if region is None:
+            self.report({'WARNING'}, "No window region found in 3D View")
+            return {'CANCELLED'}
+
+        view_layer = context.view_layer
+        target_objs = _target_objects_from_collections(collections, include_children=True)
+
+        try:
+            with bpy.context.temp_override(
+                window=context.window,
+                screen=context.window.screen,
+                area=area,
+                region=region,
+                space_data=space,
+                scene=context.scene,
+                view_layer=view_layer,
+            ):
+                if not _ensure_local_view_active(
+                    context, area, region, space, view_layer, target_objs
+                ):
+                    self.report({'ERROR'}, "Could not activate Local View")
+                    return {'CANCELLED'}
+
+                target_names = {obj.name for obj in target_objs}
+                for obj in context.scene.objects:
+                    try:
+                        obj.local_view_set(space, obj.name in target_names)
+                    except Exception:
+                        pass
+        except Exception as e:
+            self.report({'ERROR'}, f"Failed to isolate collection in Local View: {e}")
+            return {'CANCELLED'}
+
+        return {'FINISHED'}
+
+
+def _outliner_collection_menu_draw(self, context):
+    """Extra entry appended to the Outliner right-click menu for collections."""
+    self.layout.operator(
+        OUTLINER_OT_local_view_collection.bl_idname,
+        text="Isolate in Local View",
+        icon='VIS_SEL_11',
+    )
+
+
 def _find_layer_collection_path(node, target_collection):
     """Return list of LayerCollection nodes from root to target, or None."""
     try:
@@ -371,6 +477,10 @@ def register():
     bpy.utils.register_class(VIEW3D_OT_local_view_collection_activate)
     bpy.utils.register_class(VIEW3D_MT_local_view_collections)
     bpy.utils.register_class(VIEW3D_OT_collection_hierarchy_popup)
+    bpy.utils.register_class(OUTLINER_OT_local_view_collection)
+
+    # Append entry to the Outliner collection right-click context menu
+    bpy.types.OUTLINER_MT_collection.append(_outliner_collection_menu_draw)
 
     # Keymap: Numpad * opens the menu in 3D View
     wm = bpy.context.window_manager
@@ -391,6 +501,10 @@ def register():
 
 
 def unregister():
+    # Remove the Outliner context-menu entry
+    bpy.types.OUTLINER_MT_collection.remove(_outliner_collection_menu_draw)
+    bpy.utils.unregister_class(OUTLINER_OT_local_view_collection)
+
     # Remove keymap items
     try:
         for km, kmi in addon_keymaps:
